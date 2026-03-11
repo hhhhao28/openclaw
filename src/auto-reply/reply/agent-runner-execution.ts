@@ -80,16 +80,31 @@ async function createEphemeralSessionFileClone(sessionFile: string): Promise<{
   cleanup: () => Promise<void>;
 }> {
   const tempDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-session-"));
-  const clonedSessionFile = path.join(tempDir, path.basename(sessionFile) || "session.jsonl");
-  if (fs.existsSync(sessionFile)) {
-    await fsPromises.copyFile(sessionFile, clonedSessionFile);
-  }
-  return {
-    sessionFile: clonedSessionFile,
-    cleanup: async () => {
-      await fsPromises.rm(tempDir, { recursive: true, force: true });
-    },
+  const cleanup = async () => {
+    await fsPromises.rm(tempDir, { recursive: true, force: true });
   };
+  try {
+    const clonedSessionFile = path.join(tempDir, path.basename(sessionFile) || "session.jsonl");
+    let sourceExists = false;
+    try {
+      await fsPromises.access(sessionFile, fs.constants.F_OK);
+      sourceExists = true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+    }
+    if (sourceExists) {
+      await fsPromises.copyFile(sessionFile, clonedSessionFile);
+    }
+    return {
+      sessionFile: clonedSessionFile,
+      cleanup,
+    };
+  } catch (err) {
+    await cleanup();
+    throw err;
+  }
 }
 
 export async function runAgentTurnWithFallback(params: {
