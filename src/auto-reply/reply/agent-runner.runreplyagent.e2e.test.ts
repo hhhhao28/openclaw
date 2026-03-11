@@ -380,7 +380,11 @@ describe("runReplyAgent heartbeat transcript isolation", () => {
     await withTempSessionFile("seed", async (sessionFile) => {
       const appendedText = "normal transcript write";
       state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedRunParams) => {
-        await fs.appendFile(String(params.sessionFile), makeTranscriptMessageLine(appendedText), "utf-8");
+        await fs.appendFile(
+          String(params.sessionFile),
+          makeTranscriptMessageLine(appendedText),
+          "utf-8",
+        );
         return { payloads: [{ text: "ok" }], meta: {} };
       });
 
@@ -405,7 +409,11 @@ describe("runReplyAgent heartbeat transcript isolation", () => {
     await withTempSessionFile("seed", async (sessionFile, seeded) => {
       const appendedText = "Read HEARTBEAT.md and process exec completion";
       state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedRunParams) => {
-        await fs.appendFile(String(params.sessionFile), makeTranscriptMessageLine(appendedText), "utf-8");
+        await fs.appendFile(
+          String(params.sessionFile),
+          makeTranscriptMessageLine(appendedText),
+          "utf-8",
+        );
         return { payloads: [{ text: "ok" }], meta: {} };
       });
 
@@ -433,7 +441,11 @@ describe("runReplyAgent heartbeat transcript isolation", () => {
     await withTempSessionFile("seed", async (sessionFile, seeded) => {
       const appendedText = "cli heartbeat transcript write";
       state.runCliAgentMock.mockImplementationOnce(async (params: { sessionFile?: string }) => {
-        await fs.appendFile(String(params.sessionFile), makeTranscriptMessageLine(appendedText), "utf-8");
+        await fs.appendFile(
+          String(params.sessionFile),
+          makeTranscriptMessageLine(appendedText),
+          "utf-8",
+        );
         return { payloads: [{ text: "ok" }], meta: {} };
       });
 
