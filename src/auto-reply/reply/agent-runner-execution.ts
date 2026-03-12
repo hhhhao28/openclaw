@@ -85,17 +85,12 @@ async function createEphemeralSessionFileClone(sessionFile: string): Promise<{
   };
   try {
     const clonedSessionFile = path.join(tempDir, path.basename(sessionFile) || "session.jsonl");
-    let sourceExists = false;
     try {
-      await fsPromises.access(sessionFile, fs.constants.F_OK);
-      sourceExists = true;
+      await fsPromises.copyFile(sessionFile, clonedSessionFile);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
         throw err;
       }
-    }
-    if (sourceExists) {
-      await fsPromises.copyFile(sessionFile, clonedSessionFile);
     }
     return {
       sessionFile: clonedSessionFile,
