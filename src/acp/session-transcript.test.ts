@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const hoisted = vi.hoisted(() => ({
   resolveSessionTranscriptFileMock: vi.fn(),
   warnMock: vi.fn(),
+  emitSessionTranscriptUpdateMock: vi.fn(),
 }));
 
 vi.mock("../config/sessions/transcript.js", async (importOriginal) => {
@@ -35,6 +36,10 @@ vi.mock("../logging/subsystem.js", () => {
   return { createSubsystemLogger: () => makeLogger() };
 });
 
+vi.mock("../sessions/transcript-events.js", () => ({
+  emitSessionTranscriptUpdate: hoisted.emitSessionTranscriptUpdateMock,
+}));
+
 const { persistAcpPromptTranscript, persistAcpTurnTranscript } =
   await import("./session-transcript.js");
 
@@ -45,11 +50,27 @@ function readTranscriptMessages(sessionFile: string): AgentMessage[] {
     .map((entry) => (entry as { message: AgentMessage }).message);
 }
 
+async function waitForAssertion(assertion: () => void): Promise<void> {
+  const startedAt = Date.now();
+  while (true) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      if (Date.now() - startedAt >= 1_000) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+}
+
 describe("ACP session transcript persistence", () => {
   const tempDirs: string[] = [];
 
   afterEach(async () => {
     hoisted.warnMock.mockReset();
+    hoisted.emitSessionTranscriptUpdateMock.mockReset();
     vi.restoreAllMocks();
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
@@ -242,5 +263,59 @@ describe("ACP session transcript persistence", () => {
     expect(hoisted.warnMock).toHaveBeenCalledWith(
       "ACP prompt-only transcript flush skipped because SessionManager._rewriteFile is unavailable",
     );
+  });
+
+  it("waits for an async SessionManager private flush hook before emitting transcript updates", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-transcript-"));
+    tempDirs.push(tempDir);
+    const sessionFile = path.join(tempDir, "sess-5.jsonl");
+    const sessionEntry = {
+      sessionId: "sess-5",
+      updatedAt: Date.now(),
+      sessionFile,
+    };
+    hoisted.resolveSessionTranscriptFileMock.mockReset().mockImplementation(async () => ({
+      sessionFile,
+      sessionEntry,
+    }));
+
+    let resolveRewrite: (() => void) | undefined;
+    const rewritePromise = new Promise<void>((resolve) => {
+      resolveRewrite = resolve;
+    });
+    const realManager = SessionManager.open(sessionFile);
+    (
+      realManager as unknown as {
+        isPersisted?: () => boolean;
+        _rewriteFile?: () => Promise<void>;
+      }
+    ).isPersisted = () => true;
+    const rewriteSpy = vi.fn(() => rewritePromise);
+    (
+      realManager as unknown as {
+        _rewriteFile?: () => Promise<void>;
+      }
+    )._rewriteFile = rewriteSpy;
+
+    vi.spyOn(SessionManager, "open").mockReturnValue(realManager);
+
+    const persistPromise = persistAcpPromptTranscript({
+      promptText: "Investigate flaky tests",
+      sessionId: "sess-5",
+      sessionKey: "agent:codex:acp:5",
+      sessionEntry,
+      sessionAgentId: "codex",
+      sessionCwd: tempDir,
+    });
+
+    await waitForAssertion(() => {
+      expect(rewriteSpy).toHaveBeenCalledOnce();
+    });
+    expect(hoisted.emitSessionTranscriptUpdateMock).not.toHaveBeenCalled();
+
+    resolveRewrite?.();
+    await persistPromise;
+
+    expect(hoisted.emitSessionTranscriptUpdateMock).toHaveBeenCalledWith(sessionFile);
   });
 });

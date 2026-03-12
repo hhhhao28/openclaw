@@ -129,7 +129,7 @@ async function persistAcpTranscriptMessages(
   }
 
   if (changed && promptText && !replyText) {
-    forcePersistPromptOnlyTranscript(sessionManager);
+    await forcePersistPromptOnlyTranscript(sessionManager);
   }
 
   if (changed) {
@@ -190,12 +190,12 @@ function sameInputProvenance(existing: unknown, incoming: InputProvenance | unde
   );
 }
 
-function forcePersistPromptOnlyTranscript(
+async function forcePersistPromptOnlyTranscript(
   sessionManager: ReturnType<typeof SessionManager.open>,
-): void {
+): Promise<void> {
   const manager = sessionManager as unknown as {
     isPersisted?: () => boolean;
-    _rewriteFile?: () => void;
+    _rewriteFile?: () => Promise<void> | void;
   };
   if (typeof manager.isPersisted === "function" && !manager.isPersisted()) {
     return;
@@ -208,5 +208,5 @@ function forcePersistPromptOnlyTranscript(
     );
     return;
   }
-  manager._rewriteFile();
+  await manager._rewriteFile();
 }
