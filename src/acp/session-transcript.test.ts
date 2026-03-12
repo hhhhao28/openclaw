@@ -1,0 +1,141 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const hoisted = vi.hoisted(() => ({
+  resolveSessionTranscriptFileMock: vi.fn(),
+}));
+
+vi.mock("../config/sessions/transcript.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions/transcript.js")>();
+  return {
+    ...actual,
+    resolveSessionTranscriptFile: (params: unknown) =>
+      hoisted.resolveSessionTranscriptFileMock(params),
+  };
+});
+
+const { persistAcpPromptTranscript, persistAcpTurnTranscript } =
+  await import("./session-transcript.js");
+
+function readTranscriptMessages(sessionFile: string): AgentMessage[] {
+  return SessionManager.open(sessionFile)
+    .getEntries()
+    .filter((entry) => entry.type === "message")
+    .map((entry) => (entry as { message: AgentMessage }).message);
+}
+
+describe("ACP session transcript persistence", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(
+      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
+  });
+
+  it("keeps the seeded sessions_spawn prompt when the ACP turn later persists the same task", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-transcript-"));
+    tempDirs.push(tempDir);
+    const sessionFile = path.join(tempDir, "sess-1.jsonl");
+    const sessionEntry = {
+      sessionId: "sess-1",
+      updatedAt: Date.now(),
+      sessionFile,
+    };
+    hoisted.resolveSessionTranscriptFileMock.mockReset().mockImplementation(async () => ({
+      sessionFile,
+      sessionEntry,
+    }));
+    const inputProvenance = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:main:main",
+      sourceChannel: "discord",
+      sourceTool: "sessions_spawn",
+    };
+
+    await persistAcpPromptTranscript({
+      promptText: "Investigate flaky tests",
+      sessionId: "sess-1",
+      sessionKey: "agent:codex:acp:1",
+      sessionEntry,
+      sessionAgentId: "codex",
+      sessionCwd: tempDir,
+      inputProvenance,
+    });
+
+    await persistAcpTurnTranscript({
+      body: "[Thu 2026-03-12 10:00 UTC] Investigate flaky tests",
+      finalText: "I checked the failing run.",
+      sessionId: "sess-1",
+      sessionKey: "agent:codex:acp:1",
+      sessionEntry,
+      sessionAgentId: "codex",
+      sessionCwd: tempDir,
+      inputProvenance,
+    });
+
+    const messages = readTranscriptMessages(sessionFile);
+    expect(messages).toHaveLength(2);
+    expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(messages[0]).toMatchObject({
+      role: "user",
+      content: "Investigate flaky tests",
+      provenance: {
+        kind: "inter_session",
+        sourceTool: "sessions_spawn",
+      },
+    });
+    expect(messages[1]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "I checked the failing run." }],
+    });
+  });
+
+  it("does not collapse a later identical prompt from a different provenance", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-transcript-"));
+    tempDirs.push(tempDir);
+    const sessionFile = path.join(tempDir, "sess-2.jsonl");
+    const sessionEntry = {
+      sessionId: "sess-2",
+      updatedAt: Date.now(),
+      sessionFile,
+    };
+    hoisted.resolveSessionTranscriptFileMock.mockReset().mockImplementation(async () => ({
+      sessionFile,
+      sessionEntry,
+    }));
+
+    await persistAcpPromptTranscript({
+      promptText: "Investigate flaky tests",
+      sessionId: "sess-2",
+      sessionKey: "agent:codex:acp:2",
+      sessionEntry,
+      sessionAgentId: "codex",
+      sessionCwd: tempDir,
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:main",
+        sourceTool: "sessions_spawn",
+      },
+    });
+
+    await persistAcpTurnTranscript({
+      body: "[Thu 2026-03-12 10:00 UTC] Investigate flaky tests",
+      finalText: "",
+      sessionId: "sess-2",
+      sessionKey: "agent:codex:acp:2",
+      sessionEntry,
+      sessionAgentId: "codex",
+      sessionCwd: tempDir,
+      inputProvenance: undefined,
+    });
+
+    const messages = readTranscriptMessages(sessionFile);
+    expect(messages).toHaveLength(2);
+    expect(messages.map((message) => message.role)).toEqual(["user", "user"]);
+  });
+});
