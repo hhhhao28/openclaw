@@ -14,6 +14,7 @@ import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 const TIMESTAMP_ENVELOPE_PATTERN = /^\[.*\d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*]\s*/;
 const log = createSubsystemLogger("acp/session-transcript");
+const ACP_SPAWN_SEED_CUSTOM_TYPE = "openclaw.acp_spawn_seed";
 
 export const ACP_TRANSCRIPT_USAGE = {
   input: 0,
@@ -49,6 +50,7 @@ export async function persistAcpPromptTranscript(
 ): Promise<SessionEntry | undefined> {
   return await persistAcpTranscriptMessages({
     ...params,
+    seedSpawnPrompt: true,
     replyText: "",
   });
 }
@@ -63,6 +65,7 @@ export async function persistAcpTurnTranscript(
     ...params,
     promptText: params.body,
     replyText: params.finalText,
+    seedSpawnPrompt: false,
   });
 }
 
@@ -70,6 +73,7 @@ async function persistAcpTranscriptMessages(
   params: PersistAcpTranscriptParams & {
     promptText: string;
     replyText: string;
+    seedSpawnPrompt: boolean;
   },
 ): Promise<SessionEntry | undefined> {
   const promptText = params.promptText;
@@ -101,7 +105,16 @@ async function persistAcpTranscriptMessages(
   });
 
   let changed = false;
-  if (promptText && shouldAppendPrompt(sessionManager, promptText, params.inputProvenance)) {
+  const consumedPendingSpawnSeedReplay =
+    !params.seedSpawnPrompt &&
+    Boolean(promptText) &&
+    consumePendingSpawnSeedReplayDedup(sessionManager, promptText, params.inputProvenance);
+  if (consumedPendingSpawnSeedReplay) {
+    // Persist the consumed seed marker before any later assistant append so the
+    // dedupe window closes even when the replayed turn produces no text.
+    await forcePersistPromptOnlyTranscript(sessionManager);
+  }
+  if (promptText && !consumedPendingSpawnSeedReplay) {
     const userMessage = applyInputProvenanceToUserMessage(
       {
         role: "user",
@@ -111,6 +124,11 @@ async function persistAcpTranscriptMessages(
       params.inputProvenance,
     );
     sessionManager.appendMessage(userMessage as Parameters<typeof sessionManager.appendMessage>[0]);
+    if (params.seedSpawnPrompt) {
+      sessionManager.appendCustomEntry(ACP_SPAWN_SEED_CUSTOM_TYPE, {
+        pendingReplayDedup: true,
+      });
+    }
     changed = true;
   }
 
@@ -138,38 +156,42 @@ async function persistAcpTranscriptMessages(
   return sessionEntry;
 }
 
-function shouldAppendPrompt(
+function consumePendingSpawnSeedReplayDedup(
   sessionManager: ReturnType<typeof SessionManager.open>,
   promptText: string,
   inputProvenance: InputProvenance | undefined,
 ): boolean {
+  // Only dedupe the replay of the one seeded `sessions_spawn` prompt. Once that
+  // replay is consumed, later identical prompt-only retries must still persist.
+  const leafEntry = sessionManager.getLeafEntry() as
+    | {
+        type?: string;
+        customType?: string;
+        data?: { pendingReplayDedup?: boolean };
+      }
+    | undefined;
+  if (
+    leafEntry?.type !== "custom" ||
+    leafEntry.customType !== ACP_SPAWN_SEED_CUSTOM_TYPE ||
+    leafEntry.data?.pendingReplayDedup !== true
+  ) {
+    return false;
+  }
   const lastMessage = getTranscriptMessages(sessionManager).at(-1);
   if (!lastMessage || lastMessage.role !== "user") {
-    return true;
+    return false;
   }
   if (typeof lastMessage.content !== "string") {
-    return true;
+    return false;
   }
   if (normalizePromptForDedup(lastMessage.content) !== normalizePromptForDedup(promptText)) {
-    return true;
+    return false;
   }
-  return !sameInputProvenance(
-    (lastMessage as { provenance?: unknown }).provenance,
-    inputProvenance,
-  );
-}
-
-function getTranscriptMessages(
-  sessionManager: ReturnType<typeof SessionManager.open>,
-): AgentMessage[] {
-  return sessionManager
-    .getEntries()
-    .filter((entry) => entry.type === "message")
-    .map((entry) => (entry as { message: AgentMessage }).message);
-}
-
-function normalizePromptForDedup(text: string): string {
-  return text.replace(TIMESTAMP_ENVELOPE_PATTERN, "").trim();
+  if (!sameInputProvenance((lastMessage as { provenance?: unknown }).provenance, inputProvenance)) {
+    return false;
+  }
+  leafEntry.data = { ...leafEntry.data, pendingReplayDedup: false };
+  return true;
 }
 
 function sameInputProvenance(existing: unknown, incoming: InputProvenance | undefined): boolean {
@@ -188,6 +210,19 @@ function sameInputProvenance(existing: unknown, incoming: InputProvenance | unde
     normalizedExisting.sourceChannel === normalizedIncoming.sourceChannel &&
     normalizedExisting.sourceTool === normalizedIncoming.sourceTool
   );
+}
+
+function getTranscriptMessages(
+  sessionManager: ReturnType<typeof SessionManager.open>,
+): AgentMessage[] {
+  return sessionManager
+    .getEntries()
+    .filter((entry) => entry.type === "message")
+    .map((entry) => (entry as { message: AgentMessage }).message);
+}
+
+function normalizePromptForDedup(text: string): string {
+  return text.replace(TIMESTAMP_ENVELOPE_PATTERN, "").trim();
 }
 
 async function forcePersistPromptOnlyTranscript(

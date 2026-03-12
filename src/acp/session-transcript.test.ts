@@ -179,6 +179,65 @@ describe("ACP session transcript persistence", () => {
     expect(messages.map((message) => message.role)).toEqual(["user", "user"]);
   });
 
+  it("records later prompt-only retries after the seeded replay dedupe window is consumed", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-transcript-"));
+    tempDirs.push(tempDir);
+    const sessionFile = path.join(tempDir, "sess-retry.jsonl");
+    const sessionEntry = {
+      sessionId: "sess-retry",
+      updatedAt: Date.now(),
+      sessionFile,
+    };
+    hoisted.resolveSessionTranscriptFileMock.mockReset().mockImplementation(async () => ({
+      sessionFile,
+      sessionEntry,
+    }));
+    const inputProvenance = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:main:main",
+      sourceChannel: "discord",
+      sourceTool: "sessions_spawn",
+    };
+
+    await persistAcpPromptTranscript({
+      promptText: "Investigate flaky tests",
+      sessionId: "sess-retry",
+      sessionKey: "agent:codex:acp:retry",
+      sessionEntry,
+      sessionAgentId: "codex",
+      sessionCwd: tempDir,
+      inputProvenance,
+    });
+
+    await persistAcpTurnTranscript({
+      body: "[Thu 2026-03-12 10:00 UTC] Investigate flaky tests",
+      finalText: "",
+      sessionId: "sess-retry",
+      sessionKey: "agent:codex:acp:retry",
+      sessionEntry,
+      sessionAgentId: "codex",
+      sessionCwd: tempDir,
+      inputProvenance,
+    });
+
+    expect(readTranscriptMessages(sessionFile)).toHaveLength(1);
+
+    await persistAcpTurnTranscript({
+      body: "[Thu 2026-03-12 10:05 UTC] Investigate flaky tests",
+      finalText: "",
+      sessionId: "sess-retry",
+      sessionKey: "agent:codex:acp:retry",
+      sessionEntry,
+      sessionAgentId: "codex",
+      sessionCwd: tempDir,
+      inputProvenance,
+    });
+
+    const messages = readTranscriptMessages(sessionFile);
+    expect(messages).toHaveLength(2);
+    expect(messages.map((message) => message.role)).toEqual(["user", "user"]);
+  });
+
   it("flushes prompt-only transcripts even when SessionManager.isPersisted is unavailable", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-transcript-"));
     tempDirs.push(tempDir);
