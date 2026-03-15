@@ -23,10 +23,7 @@ import type { RuntimeEnv } from "../../../../src/runtime.js";
 import { loadWebMedia } from "../../../whatsapp/src/media.js";
 import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
-import {
-  shouldRetryTelegramIpv4Fallback,
-  type TelegramTransport,
-} from "../fetch.js";
+import { shouldRetryTelegramIpv4Fallback, type TelegramTransport } from "../fetch.js";
 import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,

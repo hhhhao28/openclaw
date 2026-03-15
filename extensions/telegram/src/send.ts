@@ -221,7 +221,10 @@ function setCachedTelegramClientOptions(
   return clientOptions;
 }
 
-function setCachedTelegramTransport(cacheKey: string, transport: TelegramTransport): TelegramTransport {
+function setCachedTelegramTransport(
+  cacheKey: string,
+  transport: TelegramTransport,
+): TelegramTransport {
   telegramTransportCache.set(cacheKey, transport);
   if (telegramTransportCache.size > MAX_TELEGRAM_CLIENT_OPTIONS_CACHE_SIZE) {
     const oldestKey = telegramTransportCache.keys().next().value;
